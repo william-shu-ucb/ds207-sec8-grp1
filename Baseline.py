@@ -19,6 +19,7 @@ from collections import Counter
 from collections import Counter
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
+from sklearn.svm import SVC
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, classification_report
@@ -29,6 +30,11 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import string
+import xgboost as xgb
+import tensorflow as tf
+from tensorflow import keras
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
 
 # %% [markdown]
 # ### Step 1: Data Ingestion
@@ -44,13 +50,13 @@ df.head()
 # ### Step 2: Data Cleaning
 # 
 # In this step, we ensure the dataset is properly prepared before moving on to deeper analysis and modeling. We also wrap the cleaning steps in a function to be used for later loading test data and do the same cleaning.
-# 1. **Checking for missing values** and removing or correcting any invalid rows (for example, those with empty `Phrase` fields). 
+# 1. **Checking for missing values** and removing or correcting any invalid rows (for example, those with empty `Phrase` fields).
 # 2. **Remove the `SentenceId` column**, because it functions purely as an identifier for grouping phrases by sentence and does not provide direct value for our initial baseline model.
 # 3. **Remove rows** where phrase is empty.
 # 4. **Check for duplicates** and address any outliers, ensuring our data is clean and consistent for the subsequent steps.
-# 5. **Lower Case** to standardizes the text, so that words like "Movie" and "movie" are treated as the same token. 
+# 5. **Lower Case** to standardizes the text, so that words like "Movie" and "movie" are treated as the same token.
 # 6. **Remove Punctuation**: Punctuation is typically not useful for sentiment classification and can add noise, so removing it simplifies the text.
-# 7. **Lemmatization**: Normalize different variations of the same word (e.g., “running” → “run”). 
+# 7. **Lemmatization**: Normalize different variations of the same word (e.g., “running” → “run”).
 
 # %%
 def clean_data(df):
@@ -84,7 +90,7 @@ def clean_data(df):
     nltk.download('wordnet', quiet=True)
     lemmatizer = WordNetLemmatizer()
     df["Phrase"] = df["Phrase"].apply(lambda text: " ".join([lemmatizer.lemmatize(word, pos="v") for word in text.split()]))
-    
+
 clean_data(df=df)
 
 # %% [markdown]
@@ -192,21 +198,22 @@ plt.show()
 
 # %%
 # Define the default English stopwords using NLTK
-stop_words = list(stopwords.words("english"))
+nltk.download('stopwords')
+stop_words = set(stopwords.words("english"))
 # To add custom stopwords, simply update the set. For example:
 # 1.
-# additional_stopwords = {"example", "anotherword"}
-# stop_words.update(additional_stopwords)
+additional_stopwords = {"example", "anotherword"}
+stop_words.update(additional_stopwords)
 # 2.
-# important_words = {
-#     "not", "no", "never", "none", "nor", "nothing", "nowhere",
-#     "hardly", "barely", "scarcely", "very", "too", "so", "just",
-#     "quite", "rather", "almost", "much",
-#     "aren't", "couldn't", "didn't", "doesn't", "hadn't", "hasn't",
-#     "haven't", "isn't", "mightn't", "mustn't", "needn't", "shan't",
-#     "shouldn't", "wasn't", "weren't", "won't", "wouldn't"
-# }
-# stop_words = stop_words - important_words
+important_words = {
+    "not", "no", "never", "none", "nor", "nothing", "nowhere",
+    "hardly", "barely", "scarcely", "very", "too", "so", "just",
+    "quite", "rather", "almost", "much",
+    "aren't", "couldn't", "didn't", "doesn't", "hadn't", "hasn't",
+    "haven't", "isn't", "mightn't", "mustn't", "needn't", "shan't",
+    "shouldn't", "wasn't", "weren't", "won't", "wouldn't"
+}
+stop_words = stop_words - important_words
 
 # Initialize the TF-IDF Vectorizer with the custom stopwords set and limit features to 5000
 vectorizer = TfidfVectorizer(stop_words="english", max_features=5000)
@@ -246,7 +253,60 @@ print(f"Train set: {X_train.shape}, Validation set: {X_val.shape}, Test set: {X_
 # ### Step 5: BaseLine Models
 
 # %%
+# Train the Logistic Regression classification model
 
+model_logistic = LogisticRegression(max_iter=500)
+model_logistic.fit(X_train, y_train)
+
+Y_pred_logistic = model_logistic.predict(X_test)
+acc_logistic = accuracy_score(y_test, Y_pred_logistic)
+acc_logistic
+
+# %%
+# Train the XGBoost classification model
+model_xg = xgb.XGBClassifier(
+    objective="multi:softmax",  # Multi-class classification task
+    num_class=5,  # 5 sentiment classes (0-4)
+    max_depth=10,  # Maximum tree depth
+    learning_rate=0.1,  # Learning rate
+    n_estimators=500,  # Number of trees
+    eval_metric="mlogloss",  # Multi-class loss function
+    use_label_encoder=False  # Disable default label encoding
+)
+model_xg.fit(X_train, y_train)
+
+# Make predictions
+y_pred = model_xg.predict(X_test)
+
+# Calculate accuracy
+acc_xg = accuracy_score(y_test, y_pred)
+print(f"XGBoost Accuracy: {acc_xg:.4f}")
+
+# %%
+
+# Convert labels to categorical (one-hot encoding)
+num_classes = len(set(y_train))
+y_train = keras.utils.to_categorical(y_train, num_classes)
+y_test = keras.utils.to_categorical(y_test, num_classes)
+
+# Build Neural Network
+model = keras.Sequential([
+    keras.layers.Dense(512, activation='relu', input_shape=(X_train.shape[1],)),  # First hidden layer
+    keras.layers.Dropout(0.3),  # Prevent overfitting
+    keras.layers.Dense(256, activation='relu'),  # Second hidden layer
+    keras.layers.Dropout(0.3),
+    keras.layers.Dense(num_classes, activation='softmax')  # Output layer
+])
+
+# Compile Model
+model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+
+# Train Model
+model.fit(X_train, y_train, epochs=10, batch_size=32, validation_data=(X_test, y_test))
+
+# Evaluate
+test_loss, test_acc = model.evaluate(X_test, y_test)
+print(f"Neural Network Accuracy: {test_acc:.4f}")
 
 # %% [markdown]
 # ---
