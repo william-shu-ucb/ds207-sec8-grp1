@@ -7,8 +7,11 @@
 # In this notebook, we will:
 # 1. **Load and explore the dataset**
 # 2. **Preprocess the text (cleaning, tokenization, TF-IDF)**
-# 3. **Train a baseline model (Linear Regression, Logistic Regression, and NN)**
-# 4. **Evaluate its performance**
+# 3. **Train baseline models (Logistic Regression, Random Forest, XGBoost, LightGBM, and Neural Network)**
+# 4. **Select the best model based on their performance**
+# 5. **Tuning hyperparamter of the selected model**
+# 6. **Discuss next step plan**
+# 
 # 
 
 # %% [markdown]
@@ -23,11 +26,11 @@ from sklearn.svm import SVC
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
-    accuracy_score, 
-    precision_score, 
-    recall_score, 
-    f1_score, 
-    classification_report, 
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    classification_report,
     confusion_matrix
 )
 from sklearn.model_selection import train_test_split
@@ -313,8 +316,8 @@ conf_matrix_LR  = confusion_matrix(y_test, y_pred_logistic)
 
 # Plot Confusion Matrix
 plt.figure(figsize=(8,6))
-sns.heatmap(conf_matrix_LR, annot=True, fmt='d', cmap='Blues', 
-            xticklabels=[0,1,2,3,4], 
+sns.heatmap(conf_matrix_LR, annot=True, fmt='d', cmap='Blues',
+            xticklabels=[0,1,2,3,4],
             yticklabels=[0,1,2,3,4])
 plt.xlabel("Predicted Label")
 plt.ylabel("True Label")
@@ -323,7 +326,32 @@ plt.show()
 
 
 # %% [markdown]
-# #### 5-2. XGBoost Classification Model
+# #### 5-2. Random Forest Model
+
+# %%
+# Initialize Random Forest model
+
+model_RF = RandomForestClassifier(n_estimators=100, random_state=1234, n_jobs=10)
+model_RF.fit(X_train, y_train)
+
+# Predict on test data
+y_pred = model_RF.predict(X_test)
+
+# Fit model on training data
+model_RF.fit(X_train, y_train)
+
+# Predict on test data
+y_pred = model_RF.predict(X_test)
+
+# Evaluate
+acc_RF= accuracy_score(y_test, y_pred)
+print(f"Random Forest Accuracy: {acc_RF:.4f}")
+
+# Print classification report
+print(classification_report(y_test, y_pred))
+
+# %% [markdown]
+# #### 5-3. XGBoost Classification Model
 # 
 
 # %%
@@ -335,7 +363,8 @@ model_xg = xgb.XGBClassifier(
     learning_rate=0.1,  # Learning rate
     n_estimators=500,  # Number of trees
     eval_metric="mlogloss",  # Multi-class loss function
-    use_label_encoder=False  # Disable default label encoding
+    use_label_encoder=False,  # Disable default label encoding
+    tree_method="gpu_hist"
 )
 model_xg.fit(X_train, y_train)
 
@@ -364,7 +393,7 @@ conf_matrix_xg = confusion_matrix(y_test, y_pred_xg)
 # Plot Confusion Matrix
 plt.figure(figsize=(8,6))
 sns.heatmap(conf_matrix_xg, annot=True, fmt='d', cmap='Blues',
-            xticklabels=[0,1,2,3,4], 
+            xticklabels=[0,1,2,3,4],
             yticklabels=[0,1,2,3,4])
 plt.xlabel("Predicted Label")
 plt.ylabel("True Label")
@@ -372,7 +401,7 @@ plt.title("Confusion Matrix - XGBoost")
 plt.show()
 
 # %% [markdown]
-# #### 5-3. LightGBM Classification Model
+# #### 5-4. LightGBM Classification Model
 
 # %%
 # Initialize LightGBM model
@@ -382,7 +411,7 @@ model_gbm = LGBMClassifier(
     num_leaves=63,
     learning_rate=0.1,
     n_jobs=-1,
-    random_state=1234
+    random_state=1234,
 )
 model_gbm.fit(X_train, y_train)
 
@@ -411,7 +440,7 @@ conf_matrix_LGBM = confusion_matrix(y_test, y_pred_gbm)
 # Plot Confusion Matrix
 plt.figure(figsize=(8,6))
 sns.heatmap(conf_matrix_LGBM, annot=True, fmt='d', cmap='Blues',
-            xticklabels=[0,1,2,3,4], 
+            xticklabels=[0,1,2,3,4],
             yticklabels=[0,1,2,3,4])
 plt.xlabel("Predicted Label")
 plt.ylabel("True Label")
@@ -419,14 +448,13 @@ plt.title("Confusion Matrix - LightGBM")
 plt.show()
 
 # %% [markdown]
-# #### 5-4. Neural Network model
+# #### 5-5. Neural Network model
 
 # %%
-
 # Train Neural Network model
 
-def build_model(n_classes=5, 
-                 input_dim=5000, 
+def build_model(n_classes=5,
+                 input_dim=5000,
                  hidden_layer_sizes=[],
                  activation='relu',
                  optimizer='adam',
@@ -552,44 +580,56 @@ train_and_evaluate_nn()
 
 
 # %% [markdown]
-# #### 5-5. Random Forest Model
-
-# %%
-# # Initialize Random Forest model 
-
-# model_RF = RandomForestClassifier(n_estimators=100, random_state=1234, n_jobs=10)
-# model_RF.fit(X_train, y_train)
-
-# # Predict on test data
-# y_pred = model_RF.predict(X_test)
-
-# # Fit model on training data
-# model_RF.fit(X_train, y_train)
-
-# # Predict on test data
-# y_pred = model_RF.predict(X_test)
-
-# # Evaluate
-# acc_RF= accuracy_score(y_test, y_pred)
-# print(f"Random Forest Accuracy: {acc_RF:.4f}")
-
-# # Print classification report
-# print(classification_report(y_test, y_pred))
-
-# %% [markdown]
 # ---
-# ### Step 6: Hyperparameter Tunning
-
-# %% [markdown]
-# #### Model Selection Summary
+# ### Step 7: Model Evaluation and Selection
 # 
+# #### **7-1 Overview of Model Performance**
+# We evaluated five different models for sentiment classification based on Accuracy, Weighted Precision, Weighted Recall, and Weighted F1-score.
+# 
+# | **Model**          | **Accuracy** | **Weighted Precision** | **Weighted Recall** | **Weighted F1-score** |
+# |-------------------|------------|----------------------|--------------------|----------------------|
+# | **Logistic Regression** | 0.6226 | 0.6037               | 0.6226             | 0.5928               |
+# | **Random Forest** | 0.6293 | 0.6100               | 0.6300             | 0.6024               |
+# | **XGBoost**       | 0.5204 | 0.4746               | 0.5204             | 0.3881               |
+# | **LightGBM**      | 0.6300 | 0.6099               | 0.6300             | 0.6024               |
+# | **Neural Network (MLP)** | 0.6397 | 0.6300               | 0.6400             | 0.6106               |
+# 
+# <br>
+# 
+# #### **7-2 Key Observations**
+# ##### Logistic Regression
+# - Accuracy: 62.26% – This serves as the simplest linear baseline.
+# - High recall for class 2 (0.87), but lower recall for other classes, indicating a bias toward the majority class。
+# - Fast computation but limited in capturing complex non-linear relationships.
+# 
+# ##### Random Forest
+# - Accuracy: 62.93% – Slightly better than Logistic Regression.
+# - Can handle non-linearity but does not significantly outperform Logistic Regression.
+# 
+# ##### XGBoost
+# - Accuracy: 52.04% – The lowest-performing model.
+# - Though XGBoost is powerful for structured data, it does not work well with TF-IDF features**.
+# - Severely biased toward class 2 (recall = 0.97), resulting in poor recall for other classes**.
+# 
+# ##### LightGBM
+# - Accuracy: 63.00% – The best performing tree-based model.
+# - More efficient than XGBoost for high-dimensional sparse features like TF-IDF.
+# - Performance is very close to Neural Network (MLP), but computationally cheaper.
+# 
+# ##### Neural Network (MLP)
+# - Accuracy: 63.97% – The best-performing model so far.
+# - Demonstrates better non-linear modeling capabilities compared to tree-based models.
+# - Outperforms all other models by 1.5%-2%, making it a strong final model candidate.
+# - Higher computational cost but justifies the performance gain.
+# 
+# <br>
+# 
+# #### **7-3 Final Model Selection**
 # After evaluating several models, including **Logistic Regression**, **Random Forest**, **LightGBM**, and **XGBoost**,  
 # we have selected the **Neural Network** as the best-performing model for the sentiment analysis task.
 # 
 # This decision is based on a comprehensive comparison of evaluation metrics such as accuracy, precision, recall,  
-# F1-score, and confusion matrices. While some traditional models demonstrated faster training times,  
-# they consistently struggled to capture the **complex relationships between words and sentiment**,  
-# especially in handling **subtle contextual patterns and polarity shifts**.
+# F1-score, confusion matrices, and computational cost.
 # 
 # The Neural Network, with a baseline architecture of **[512, 256] hidden layers using ReLU activation and Adam optimizer**,  
 # achieved the following performance:
@@ -603,6 +643,10 @@ train_and_evaluate_nn()
 # Based on this, we have decided to focus the next stage of our work on **hyperparameter tuning for the Neural Network**,  
 # aiming to further improve its generalization performance.
 # 
+
+# %% [markdown]
+# ---
+# ### Step 8: Hyperparameter Tunning
 
 # %%
 nn_configurations = [
@@ -622,10 +666,6 @@ print("\nHyperparameter Tuning Results:")
 print(df_results)
 
 # %% [markdown]
-# ---
-# ### Step 7: Evaluation
-
-# %% [markdown]
 # ### Hyperparameter Tuning Summary
 # 
 # We performed an initial round of hyperparameter tuning for the Neural Network model, exploring different combinations of:
@@ -635,7 +675,7 @@ print(df_results)
 # - Optimizers (Adam vs SGD)
 # - Learning Rate (fixed at 0.01 for this round)
 # 
-# ---
+# <br>
 # 
 # #### Summary of Results
 # 
@@ -646,7 +686,7 @@ print(df_results)
 # | [128], tanh, adam | 0.79 | 0.56 | 0.55 | Overfitting (train much higher than val) |
 # | [512], relu, sgd | 0.52 | 0.53 | 0.39 | Poor training and generalization (SGD struggles) |
 # 
-# ---
+# <br>
 # 
 # #### Key Observations
 # 
@@ -655,7 +695,7 @@ print(df_results)
 # 3. Tanh tends to overfit, reaching very high training accuracy but much lower validation accuracy.
 # 4. ReLU with Adam emerges as the most consistent and stable choice, with solid performance across different layer sizes.
 # 
-# ---
+# <br>
 # 
 # #### Conclusion
 # 
@@ -668,6 +708,13 @@ print(df_results)
 # 
 # This architecture achieves a good balance between performance and simplicity, making it a strong candidate for further tuning (e.g., adjusting learning rate, adding regularization, increasing epoch count, and exploring batch normalization).
 # 
+
+# %% [markdown]
+# ---
+# ### Step 9: Next Step
+# 1. **Fine-tune Neural Network (MLP)** – Furthur adjust hidden layers, learning rate, dropout, batch size, and optimizer to improve performance.
+# 2. **Consider LSTM or BERT** – Explore deep NLP models that can capture   contextual information more effectively.
+# 3. **Error Analysis** – Review misclassified samples to refine preprocessing and feature engineering.
 
 # %%
 
