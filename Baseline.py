@@ -1,6 +1,8 @@
 # %% [markdown]
 # # Sentiment Analysis on Movie Reviews - Baseline Model
 # 
+# **Author**: Nicole Zhang, Viola Qiu, William Shu
+# 
 # ## Introduction
 # This notebook serves as a baseline model for the **Sentiment Analysis on Movie Reviews** competition hosted on Kaggle ([competition link](https://www.kaggle.com/competitions/sentiment-analysis-on-movie-reviews/overview)). The objective of this competition is to classify movie reviews into five sentiment categories (0: negative, 1: somewhat negative, 2: neutral, 3: somewhat positive, 4: positive) based on textual phrases extracted from Rotten Tomatoes reviews. The dataset contains phrases labeled with sentiment scores, making it a multi-class text classification task.
 # 
