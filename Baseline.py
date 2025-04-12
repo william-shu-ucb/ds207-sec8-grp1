@@ -21,9 +21,9 @@
 
 # %%
 from collections import Counter
-from collections import Counter
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
+from nltk.tokenize import word_tokenize  # Corrected from 'atokenize'
 from sklearn.svm import SVC
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
@@ -45,11 +45,14 @@ import string
 import xgboost as xgb
 import tensorflow as tf
 from tensorflow import keras
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.ensemble import RandomForestClassifier
 from lightgbm import LGBMClassifier
-
+# New imports for embeddings and CNN
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from sklearn.model_selection import ParameterSampler
+nltk.download('punkt', quiet=True)
 
 # %% [markdown]
 # ### Step 1: Data Ingestion
@@ -112,6 +115,20 @@ def clean_data(df):
     df["Phrase"] = df["Phrase"].apply(lambda text: " ".join([lemmatizer.lemmatize(word, pos="v") for word in text.split()]))
 
 clean_data(df=df)
+
+# %%
+# Alternative cleaning for embeddings
+def clean_data_for_embeddings(df):
+    print("Cleaning data for embeddings...")
+    df = df[['PhraseId', 'Phrase', 'Sentiment']]
+    initial_count = df.shape[0]
+    df = df[df['Phrase'].str.strip() != '']
+    print(f"Removed {initial_count - df.shape[0]} rows where Phrase was empty.")
+    df['Phrase'] = df['Phrase'].str.lower()  # Keep lowercase, skip punctuation removal (punctuation could emphasize the sentiment) and lemmatization (could have its own nuances and GloVe already pre-trained with lemmatization)
+    return df
+
+# Create a separate DataFrame for embeddings
+df_emb = clean_data_for_embeddings(df.copy())
 
 # %% [markdown]
 # **Purpose**
@@ -278,6 +295,52 @@ print("Top TF-IDF words in first text:")
 for word, score in zip(top_words, top_scores):
     print(f"{word}: {score:.4f}")
 
+# %%
+max_len = 50
+tokenizer = Tokenizer()
+tokenizer.fit_on_texts(df_emb['Phrase'])
+
+X_seq = tokenizer.texts_to_sequences(df_emb['Phrase'])
+
+X_pad = pad_sequences(X_seq, maxlen=max_len, padding='post', truncating='post')
+y_emb = df_emb['Sentiment']
+
+X_train_pad, X_temp_pad, y_train_emb, y_temp_emb = train_test_split(X_pad, y_emb, test_size=0.4, random_state=1234)
+X_val_pad, X_test_pad, y_val_emb, y_test_emb = train_test_split(X_temp_pad, y_temp_emb, test_size=0.5, random_state=1234)
+
+print(f"Shape of padded training data: {X_train_pad.shape}")
+print(f"Vocabulary size: {len(tokenizer.word_index) + 1}")
+
+# %% [markdown]
+# We use GloVe embeddings to capture semantic relationships in the text. The embedding matrix maps each word in our vocabulary to its pre-trained vector.
+
+# %%
+def load_glove_embeddings(glove_file_path, word_index, embedding_dim=100):
+    embeddings_index = {}
+    with open(glove_file_path, encoding='utf-8') as f:
+        for line in f:
+            values = line.split()
+            word = values[0]
+            coefs = np.asarray(values[1:], dtype='float32')
+            embeddings_index[word] = coefs
+    
+    vocab_size = len(word_index) + 1
+    embedding_matrix = np.zeros((vocab_size, embedding_dim))
+    for word, i in word_index.items():
+        embedding_vector = embeddings_index.get(word)
+        if embedding_vector is not None:
+            embedding_matrix[i] = embedding_vector
+    
+    return embedding_matrix
+
+glove_path = 'glove.6B.100d.txt'
+embedding_dim = 100
+embedding_matrix = load_glove_embeddings(glove_file_path=glove_path, 
+                                        word_index=tokenizer.word_index, 
+                                        embedding_dim=embedding_dim)
+
+print(f"Embedding matrix shape: {embedding_matrix.shape}")
+
 # %% [markdown]
 # #### Train, Validation, Test Split
 # 1. **Split into Train and Validation Sets**: Divide the training data (from `train.tsv`) into 60% for training, 20% for validation, 20% for tests.
@@ -295,6 +358,160 @@ print(f"Train set: {X_train.shape}, Validation set: {X_val.shape}, Test set: {X_
 # %% [markdown]
 # ---
 # ### Step 5: BaseLine Models
+
+# %% [markdown]
+# #### Step 5-0: CNN with GloVe Embeddings
+# 
+# Convolutional Neural Network to capture sentiment-indicating phrases using GloVe embeddings. The model uses multiple kernel sizes to detect patterns of varying lengths and includes global pooling for robust feature extraction.
+
+# %%
+def build_cnn_model(vocab_size, embedding_dim, max_len, embedding_matrix, kernel_sizes=[3, 5], pooling='max', trainable_embeddings=False):
+    inputs = keras.layers.Input(shape=(max_len,))
+    embedding = keras.layers.Embedding(
+        input_dim=vocab_size,
+        output_dim=embedding_dim,
+        weights=[embedding_matrix],
+        input_length=max_len,
+        trainable=trainable_embeddings
+    )(inputs)
+    
+    conv_layers = []
+    for ks in kernel_sizes:
+        conv = keras.layers.Conv1D(filters=64, kernel_size=ks, activation='relu', padding='same')(embedding)
+        if pooling == 'max':
+            pooled = keras.layers.MaxPooling1D(pool_size=2)(conv)
+        elif pooling == 'avg':
+            pooled = keras.layers.AveragePooling1D(pool_size=2)(conv)
+        conv_layers.append(pooled)
+    
+    if len(kernel_sizes) > 1:
+        concat = keras.layers.Concatenate()(conv_layers)
+    else:
+        concat = conv_layers[0]
+    
+    if pooling == 'max':
+        pooled = keras.layers.GlobalMaxPooling1D()(concat)
+    else:
+        pooled = keras.layers.GlobalAveragePooling1D()(concat)
+    
+    dense = keras.layers.Dense(128, activation='relu')(pooled)
+    dropout = keras.layers.Dropout(0.5)(dense)
+    outputs = keras.layers.Dense(5, activation='softmax')(dropout)
+    
+    model = keras.Model(inputs=inputs, outputs=outputs)
+    model.compile(
+        optimizer='adam',
+        loss='sparse_categorical_crossentropy',
+        metrics=['accuracy']
+    )
+    return model
+
+vocab_size = len(tokenizer.word_index) + 1
+
+cnn_model = build_cnn_model(vocab_size, embedding_dim, max_len, embedding_matrix)
+cnn_model.summary()
+
+history = cnn_model.fit(
+    X_train_pad, y_train_emb,
+    epochs=10,
+    batch_size=32,
+    validation_data=(X_val_pad, y_val_emb),
+    verbose=1
+)
+
+y_pred_cnn = np.argmax(cnn_model.predict(X_test_pad), axis=1)
+accuracy_cnn = accuracy_score(y_test_emb, y_pred_cnn)
+precision_cnn = precision_score(y_test_emb, y_pred_cnn, average='weighted')
+recall_cnn = recall_score(y_test_emb, y_pred_cnn, average='weighted')
+f1_cnn = f1_score(y_test_emb, y_pred_cnn, average='weighted')
+report_cnn = classification_report(y_test_emb, y_pred_cnn)
+
+print("\nCNN with GloVe Embeddings - Evaluation Metrics")
+print(f"Accuracy: {accuracy_cnn:.4f}")
+print(f"Precision (Weighted): {precision_cnn:.4f}")
+print(f"Recall (Weighted): {recall_cnn:.4f}")
+print(f"F1 Score (Weighted): {f1_cnn:.4f}")
+print("\nClassification Report:")
+print(report_cnn)
+
+# Plot confusion matrix
+conf_matrix_cnn = confusion_matrix(y_test_emb, y_pred_cnn)
+plt.figure(figsize=(8,6))
+sns.heatmap(conf_matrix_cnn, annot=True, fmt='d', cmap='Blues',
+            xticklabels=[0,1,2,3,4],
+            yticklabels=[0,1,2,3,4])
+plt.xlabel("Predicted Label")
+plt.ylabel("True Label")
+plt.title("Confusion Matrix - CNN with GloVe")
+plt.show()
+
+# %% [markdown]
+# We test GloVe embeddings with other dimensions, 50D, 100D, and 200D to evaluate their impact on CNN performance.
+
+# %%
+embedding_dims = [50, 100, 200, 300]
+results_emb = []
+
+for dim in embedding_dims:
+    print(f"\nTraining CNN with {dim}D GloVe embeddings...")
+    glove_path = f'glove.6B.{dim}d.txt'
+    embedding_matrix = load_glove_embeddings(glove_path, tokenizer.word_index, dim)
+    cnn_model = build_cnn_model(vocab_size, dim, max_len, embedding_matrix)
+    cnn_model.fit(X_train_pad, y_train_emb, epochs=10, batch_size=32, validation_data=(X_val_pad, y_val_emb), verbose=0)
+    y_pred = np.argmax(cnn_model.predict(X_test_pad), axis=1)
+    results_emb.append({
+        'embedding_dim': dim,
+        'accuracy': accuracy_score(y_test_emb, y_pred),
+        'precision': precision_score(y_test_emb, y_pred, average='weighted'),
+        'recall': recall_score(y_test_emb, y_pred, average='weighted'),
+        'f1': f1_score(y_test_emb, y_pred, average='weighted')
+    })
+
+print("\nEmbedding Dimension Experiment Results:")
+print(pd.DataFrame(results_emb))
+
+# %% [markdown]
+# Try with different kernel_sizes.
+
+# %%
+configs = [
+    {'kernel_sizes': [3], 'pooling': 'max'},
+    {'kernel_sizes': [3, 5], 'pooling': 'max'},
+    {'kernel_sizes': [3, 5, 7], 'pooling': 'avg'}
+]
+
+embedding_dim = 300
+vocab_size = len(tokenizer.word_index) + 1
+
+glove_path = 'glove.6B.300d.txt'
+embedding_matrix = load_glove_embeddings(glove_file_path=glove_path, 
+                                        word_index=tokenizer.word_index, 
+                                        embedding_dim=embedding_dim)
+
+results_cnn = []
+for config in configs:
+    print(f"\nTraining CNN with kernel_sizes={config['kernel_sizes']}, pooling={config['pooling']}...")
+    cnn_model = build_cnn_model(vocab_size, embedding_dim, max_len, embedding_matrix, **config)
+    cnn_model.fit(X_train_pad, y_train_emb, epochs=10, batch_size=32, 
+                  validation_data=(X_val_pad, y_val_emb), verbose=0)
+    y_pred = np.argmax(cnn_model.predict(X_test_pad), axis=1)
+    results_cnn.append({
+        'kernel_sizes': config['kernel_sizes'],
+        'pooling': config['pooling'],
+        'accuracy': accuracy_score(y_test_emb, y_pred),
+        'precision': precision_score(y_test_emb, y_pred, average='weighted'),
+        'recall': recall_score(y_test_emb, y_pred, average='weighted'),
+        'f1': f1_score(y_test_emb, y_pred, average='weighted')
+    })
+
+print("\nCNN Architecture Experiment Results:")
+print(pd.DataFrame(results_cnn))
+
+# %% [markdown]
+# Kernel size 3 performed the best with 65.19% accuracy
+
+# %% [markdown]
+# Hyper parameter tunning.
 
 # %% [markdown]
 # #### 5-1. Logistic Regression Classification model
@@ -697,6 +914,8 @@ train_and_evaluate_nn()
 # | **XGBoost**                 | 0.5204     | 0.4746                 | 0.5204             | 0.3881               |
 # | **LightGBM**                | 0.6300     | 0.6099                 | 0.6300             | 0.6024               |
 # | **Neural Network (MLP)**    | 0.6414     | 0.6300                 | 0.6400             | 0.6123               |
+# | **CNN+Kenel(5)+Emb**        | 0.6499     | 0.6562                 | 0.6499             | 0.6452               |
+# | **CNN+Kenel(3)+Emb**        | 0.6519     | 0.6470                 | 0.6519             | 0.6398               |
 # 
 # <br>
 # 
@@ -751,6 +970,45 @@ train_and_evaluate_nn()
 # %% [markdown]
 # ---
 # ### Step 8: Hyperparameter Tunning
+
+# %% [markdown]
+# CNN Hyperparameter Tunning based on kernal size 3.
+
+# %%
+param_dist = {
+    'filters': [64, 128],
+    'dropout_rate': [0.3, 0.5],
+    'learning_rate': [0.001, 0.01]
+}
+n_iter = 4
+param_list = list(ParameterSampler(param_dist, n_iter=n_iter, random_state=1234))
+results_tuning = []
+for params in param_list:
+    model = keras.Sequential([
+        keras.layers.Embedding(len(tokenizer.word_index) + 1, embedding_dim, weights=[embedding_matrix], input_length=max_len, trainable=False),
+        keras.layers.Conv1D(filters=params['filters'], kernel_size=3, activation='relu', padding='same'),
+        keras.layers.MaxPooling1D(pool_size=2),
+        keras.layers.GlobalMaxPooling1D(),
+        keras.layers.Dense(128, activation='relu'),
+        keras.layers.Dropout(params['dropout_rate']),
+        keras.layers.Dense(5, activation='softmax')
+    ])
+    model.compile(optimizer=keras.optimizers.Adam(learning_rate=params['learning_rate']),
+                  loss='sparse_categorical_crossentropy',
+                  metrics=['accuracy'])
+    model.fit(X_train_pad, y_train_emb, epochs=10, batch_size=32, validation_data=(X_val_pad, y_val_emb), verbose=0)
+    y_pred = np.argmax(model.predict(X_test_pad), axis=1)
+    results_tuning.append({
+        'filters': params['filters'],
+        'dropout_rate': params['dropout_rate'],
+        'learning_rate': params['learning_rate'],
+        'accuracy': accuracy_score(y_test_emb, y_pred),
+        'precision': precision_score(y_test_emb, y_pred, average='weighted'),
+        'recall': recall_score(y_test_emb, y_pred, average='weighted'),
+        'f1': f1_score(y_test_emb, y_pred, average='weighted')
+    })
+print("\nCNN Hyperparameter Tuning Results:")
+print(pd.DataFrame(results_tuning))
 
 # %%
 nn_configurations = [
